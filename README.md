@@ -70,7 +70,7 @@ The pipeline is a graph of three assets with declared dependencies — Dagster r
 | Layer | Tool |
 |---|---|
 | Storage format | Delta Lake (`deltalake` / delta-rs) |
-| Query engine | DuckDB (with the `delta` extension) |
+| Query engine | DuckDB (Delta extension in the pipeline; Parquet for the deployed app) |
 | Orchestration | Dagster (assets + asset checks) |
 | Dashboard | Streamlit + Plotly |
 | Language | Python |
