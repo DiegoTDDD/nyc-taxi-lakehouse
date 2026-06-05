@@ -3,9 +3,12 @@
 __pycache__/
 *.pyc
 
-# Raw data and lakehouse tables — never version heavy data
+# Raw data and heavy lakehouse tables — never version these
 data/raw/
 data/lakehouse/
+
+# Keep the small Gold Parquet exports for the deployed dashboard
+!data/gold_parquet/
 
 # Dagster local runtime
 .dagster/

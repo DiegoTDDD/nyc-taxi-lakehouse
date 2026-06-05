@@ -1,4 +1,4 @@
-"""NYC Taxi Lakehouse — Streamlit dashboard reading the Gold Delta tables.
+"""NYC Taxi Lakehouse — Streamlit dashboard reading the Gold Parquet tables.
 
 The headline is the congestion pricing impact (Jan 2025): how Manhattan trips
 changed before vs after the fee was introduced.
@@ -12,18 +12,17 @@ import plotly.express as px
 import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-GOLD_DIR = PROJECT_ROOT / "data" / "lakehouse" / "gold"
+GOLD_DIR = PROJECT_ROOT / "data" / "gold_parquet"
 
 st.set_page_config(page_title="NYC Taxi Lakehouse", page_icon="🚕", layout="wide")
 
 
 @st.cache_data
 def load_gold(table_name: str) -> pd.DataFrame:
-    """Read a Gold Delta table into a pandas DataFrame via DuckDB."""
-    table_path = GOLD_DIR / table_name
+    """Read a Gold Parquet table into a pandas DataFrame via DuckDB."""
+    table_path = GOLD_DIR / f"{table_name}.parquet"
     con = duckdb.connect()
-    con.execute("INSTALL delta; LOAD delta;")
-    df = con.execute(f"SELECT * FROM delta_scan('{table_path.as_posix()}')").df()
+    df = con.execute(f"SELECT * FROM read_parquet('{table_path.as_posix()}')").df()
     con.close()
     return df
 
