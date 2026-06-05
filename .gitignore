@@ -1,0 +1,22 @@
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# Raw data and lakehouse tables — never version heavy data
+data/raw/
+data/lakehouse/
+
+# Dagster local runtime
+.dagster/
+dagster_home/
+tmp*/
+.tmp_dagster_home*/
+
+# Environment variables / secrets
+.env
+
+# OS / editor noise
+.DS_Store
+.vscode/
+*.log
