@@ -8,7 +8,7 @@ An end-to-end **data lakehouse** built on the medallion architecture (Bronze →
 
 ---
 
-## Skills Demonstrated
+## Skills demonstrated
 
 - Data Lakehouse Architecture
 - Medallion Modeling
