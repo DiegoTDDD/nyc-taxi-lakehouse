@@ -1,4 +1,5 @@
 # 🚕 NYC Yellow Taxi — Medallion Lakehouse
+Measuring the Impact of NYC Congestion Pricing on Taxi Demand
 
 An end-to-end **data lakehouse** built on the medallion architecture (Bronze → Silver → Gold) over **22M+ NYC Yellow Taxi trips**, orchestrated with Dagster and surfaced through an interactive Streamlit dashboard.
 
@@ -7,6 +8,17 @@ An end-to-end **data lakehouse** built on the medallion architecture (Bronze →
 🔗 **Live dashboard:** [nyc-taxi-lakehouse.streamlit.app](https://nyc-taxi-lakehouse.streamlit.app)
 
 ---
+
+## Skills Demonstrated
+
+- Data Lakehouse Architecture
+- Medallion Modeling
+- Delta Lake Schema Evolution
+- Data Quality Engineering
+- Data Orchestration with Dagster
+- Analytical SQL
+- Dashboard Development
+- Cloud Deployment
 
 ## The business question
 
