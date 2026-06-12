@@ -91,6 +91,9 @@ The pipeline is a graph of three assets with declared dependencies — Dagster r
 ## Running it locally
 
 ```bash
+## Running it locally
+
+```
 # 1. Create and activate a virtual environment
 python -m venv .venv
 source .venv/Scripts/activate        # Windows (Git Bash)
@@ -113,7 +116,12 @@ python src/nyc_taxi_lakehouse/export_gold.py
 
 # 6. Launch the dashboard
 streamlit run dashboard.py
+```
 ---
+
+## Data source
+
+[NYC TLC Trip Record Data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page) — Yellow Taxi, October 2024 through March 2025. Raw data is not versioned in this repository.
 
 ## Data source
 
