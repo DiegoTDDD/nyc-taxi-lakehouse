@@ -90,11 +90,12 @@ The pipeline is a graph of three assets with declared dependencies — Dagster r
 
 ## Running it locally
 
+```bash
 # 1. Create and activate a virtual environment
 python -m venv .venv
 source .venv/Scripts/activate        # Windows (Git Bash)
-# .venv\Scripts\Activate.ps1          # Windows (PowerShell)
-# source .venv/bin/activate           # macOS / Linux
+# .venv\Scripts\Activate.ps1         # Windows (PowerShell)
+# source .venv/bin/activate          # macOS / Linux
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -112,6 +113,7 @@ python src/nyc_taxi_lakehouse/export_gold.py
 
 # 6. Launch the dashboard
 streamlit run dashboard.py
+```
 
 ## Data source
 
