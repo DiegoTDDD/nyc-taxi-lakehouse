@@ -116,7 +116,3 @@ streamlit run dashboard.py
 ## Data source
 
 [NYC TLC Trip Record Data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page) — Yellow Taxi, October 2024 through March 2025. Raw data is not versioned in this repository.
-
-## Data source
-
-[NYC TLC Trip Record Data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page) — Yellow Taxi, October 2024 through March 2025. Raw data is not versioned in this repository.
