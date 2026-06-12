@@ -94,6 +94,7 @@ The pipeline is a graph of three assets with declared dependencies — Dagster r
 # 1. Create and activate a virtual environment
 python -m venv .venv
 source .venv/Scripts/activate        # Windows (Git Bash)
+# .venv\Scripts\Activate.ps1          # Windows (PowerShell)
 # source .venv/bin/activate           # macOS / Linux
 
 # 2. Install dependencies
@@ -107,10 +108,11 @@ python src/nyc_taxi_lakehouse/download_zones.py
 dagster dev -f src/nyc_taxi_lakehouse/definitions.py
 # then open http://localhost:3000 and click "Materialize all"
 
-# 5. Launch the dashboard
-streamlit run dashboard.py
-```
+# 5. Export the Gold tables to Parquet for the dashboard
+python src/nyc_taxi_lakehouse/export_gold.py
 
+# 6. Launch the dashboard
+streamlit run dashboard.py
 ---
 
 ## Data source
