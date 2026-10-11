@@ -171,4 +171,3 @@ defs = Definitions(
     assets=[bronze_trips, silver_trips, gold_tables],
     asset_checks=[silver_no_negative_fares, silver_valid_durations],
 )
-pip show streamlit
