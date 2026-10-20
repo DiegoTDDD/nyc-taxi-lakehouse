@@ -115,6 +115,11 @@ python src/nyc_taxi_lakehouse/export_gold.py
 streamlit run dashboard.py
 ```
 
+## Automated checks
+
+- **Security audit** (`security-audit.yml`) audits every `requirements*.txt` with `pip-audit` whenever dependencies change and every Monday. It fails only when a vulnerable package has a fixed version available.
+- **App health** (`app-health.yml`) opens the [live app](https://nyc-taxi-lakehouse.streamlit.app) in a real browser after each push and once a day (waking it if it was asleep) and fails if the app shows an error.
+
 ## Data source
 
 [NYC TLC Trip Record Data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page) — Yellow Taxi, October 2024 through March 2025. Raw data is not versioned in this repository.
