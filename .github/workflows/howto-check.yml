@@ -1,0 +1,119 @@
+name: How-to-run check
+
+# Runs the steps of the README section "Running it locally" for real (Linux variant), with the real
+# TLC data, and checks the numbers the README quotes. It is heavy (about 360 MB of downloads and 22 million
+# rows), so it runs when this file changes, every month, and on demand ("Run workflow").
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 1 * *"
+  push:
+    paths:
+      - ".github/workflows/howto-check.yml"
+
+permissions:
+  contents: read
+  actions: write   # only used to keep the monthly schedule enabled (see last step)
+
+jobs:
+  readme-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "README steps 1-2: virtual environment and dependencies"
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          .venv/bin/pip install -r requirements.txt
+
+      - name: "README step 3: download the raw data"
+        run: |
+          python src/nyc_taxi_lakehouse/download_data.py
+          python src/nyc_taxi_lakehouse/download_zones.py
+          ls -la data/raw
+          test "$(ls data/raw/yellow_tripdata_*.parquet | wc -l)" -eq 6
+          test -s data/raw/taxi_zone_lookup.csv
+
+      - name: "README step 4: dagster dev starts and serves the UI on port 3000"
+        run: |
+          nohup dagster dev -f src/nyc_taxi_lakehouse/definitions.py > dagster-dev.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:3000/server_info >/dev/null; then echo "Dagster UI is up on port 3000"; break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:3000/server_info || { tail -30 dagster-dev.log; exit 1; }
+          pkill -f "dagster dev" || true
+          sleep 3
+
+      - name: "README step 4: materialize all assets (same as clicking Materialize all)"
+        run: dagster asset materialize --select '*' -f src/nyc_taxi_lakehouse/definitions.py
+
+      - name: The row counts quoted in the README are right
+        run: |
+          python - <<'PY'
+          import duckdb
+          con = duckdb.connect()
+          con.execute("INSTALL delta; LOAD delta;")
+          bronze = con.execute("select count(*) from delta_scan('data/lakehouse/bronze')").fetchone()[0]
+          silver = con.execute("select count(*) from delta_scan('data/lakehouse/silver')").fetchone()[0]
+          print(f"bronze rows: {bronze:,} | silver rows: {silver:,} | removed: {(bronze - silver) / bronze:.1%}")
+          assert bronze == 22_346_537, bronze
+          assert silver == 18_165_564, silver
+          PY
+
+      - name: "README step 5: export the Gold tables"
+        run: python src/nyc_taxi_lakehouse/export_gold.py
+
+      - name: The exported Gold tables equal the ones committed for the dashboard
+        run: |
+          python - <<'PY'
+          import glob, os, subprocess, tempfile
+          import pandas as pd
+          committed = tempfile.mkdtemp()
+          subprocess.run(["git", "archive", "HEAD", "data/gold_parquet"], check=True, stdout=open(os.path.join(committed, "g.tar"), "wb"))
+          subprocess.run(["tar", "xf", os.path.join(committed, "g.tar"), "-C", committed], check=True)
+          bad = []
+          for f in sorted(glob.glob("data/gold_parquet/*.parquet")):
+              old = pd.read_parquet(os.path.join(committed, f))
+              new = pd.read_parquet(f)
+              sort = list(new.columns)
+              try:
+                  pd.testing.assert_frame_equal(old.sort_values(sort).reset_index(drop=True),
+                                                new.sort_values(sort).reset_index(drop=True),
+                                                check_dtype=False, check_exact=False, rtol=1e-9, atol=1e-9)
+                  print("same      ", f, new.shape)
+              except AssertionError as e:
+                  print("DIFFERENT ", f, new.shape, str(e).splitlines()[:3])
+                  bad.append(f)
+          assert not bad, bad
+          PY
+
+      - name: "README step 6: the dashboard starts"
+        run: |
+          python -m streamlit run dashboard.py --server.headless true --server.port 8501 > streamlit.log 2>&1 &
+          for i in $(seq 1 45); do
+            if curl -sf http://127.0.0.1:8501/_stcore/health >/dev/null; then echo "dashboard is up"; exit 0; fi
+            sleep 2
+          done
+          tail -30 streamlit.log
+          exit 1
+
+      - name: Show the logs on failure
+        if: failure()
+        run: |
+          tail -40 dagster-dev.log || true
+          tail -40 streamlit.log || true
+
+      - name: Keep the monthly schedule enabled
+        if: ${{ always() && github.event_name == 'schedule' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/howto-check.yml/enable"
