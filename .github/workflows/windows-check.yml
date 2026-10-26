@@ -1,0 +1,61 @@
+name: Windows check
+
+# Runs the README's environment steps on a real Windows machine, in the two shells the README documents
+# (Git Bash and PowerShell): create the virtual environment, activate it, install the dependencies and
+# check that the main libraries load. Runs when this file changes, every month and on demand.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "31 6 1 * *"
+  push:
+    paths:
+      - ".github/workflows/windows-check.yml"
+
+permissions:
+  contents: read
+  actions: write   # only used to keep the monthly schedule enabled (see last step)
+
+jobs:
+  windows:
+    name: Windows / ${{ matrix.shell }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [bash, pwsh]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "Git Bash: create and activate the environment, install, smoke test"
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          python -m venv .venv
+          source .venv/Scripts/activate
+          python -c "import sys; assert '.venv' in sys.prefix, sys.prefix; print('active environment:', sys.prefix)"
+          pip install -r requirements.txt
+          python -c "import dagster, deltalake, duckdb, polars, streamlit; print('dagster', dagster.__version__, '| duckdb', duckdb.__version__)"
+
+      - name: "PowerShell: create and activate the environment, install, smoke test"
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .venv\Scripts\Activate.ps1
+          python -c "import sys; assert '.venv' in sys.prefix, sys.prefix; print('active environment:', sys.prefix)"
+          pip install -r requirements.txt
+          python -c "import dagster, deltalake, duckdb, polars, streamlit; print('dagster', dagster.__version__, '| duckdb', duckdb.__version__)"
+
+      - name: Keep the monthly schedule enabled
+        if: ${{ always() && github.event_name == 'schedule' && matrix.shell == 'bash' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/windows-check.yml/enable"
