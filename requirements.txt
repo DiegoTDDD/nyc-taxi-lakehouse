@@ -5,5 +5,5 @@ duckdb
 pandas
 pyarrow
 requests
-streamlit==1.60.0
+streamlit==1.66.1
 plotly
