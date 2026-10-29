@@ -32,25 +32,53 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: "Git Bash: create and activate the environment, install, smoke test"
+      - name: "Git Bash: create and activate the environment"
         if: matrix.shell == 'bash'
         shell: bash
         run: |
           python -m venv .venv
           source .venv/Scripts/activate
           python -c "import sys; assert '.venv' in sys.prefix, sys.prefix; print('active environment:', sys.prefix)"
-          pip install -r requirements.txt
-          python -c "import dagster, deltalake, duckdb, polars, streamlit; print('dagster', dagster.__version__, '| duckdb', duckdb.__version__)"
 
-      - name: "PowerShell: create and activate the environment, install, smoke test"
+      - name: "Git Bash: install the dependencies"
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          source .venv/Scripts/activate
+          pip install -r requirements.txt 2>&1 | tee pip.log
+          if [ "${PIPESTATUS[0]}" -ne 0 ]; then echo "::error::pip install failed: $(tail -6 pip.log | tr '\n' '|' | cut -c1-700)"; exit 1; fi
+
+      - name: "Git Bash: the main libraries load"
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          source .venv/Scripts/activate
+          python -c "import dagster, deltalake, duckdb, pandas, pyarrow, plotly, streamlit; print('dagster', dagster.__version__, '| duckdb', duckdb.__version__, '| streamlit', streamlit.__version__)" || { echo "::error::the smoke test failed"; exit 1; }
+
+      - name: "PowerShell: create and activate the environment"
         if: matrix.shell == 'pwsh'
         shell: pwsh
         run: |
           python -m venv .venv
           .venv\Scripts\Activate.ps1
           python -c "import sys; assert '.venv' in sys.prefix, sys.prefix; print('active environment:', sys.prefix)"
-          pip install -r requirements.txt
-          python -c "import dagster, deltalake, duckdb, polars, streamlit; print('dagster', dagster.__version__, '| duckdb', duckdb.__version__)"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: "PowerShell: install the dependencies"
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: |
+          .venv\Scripts\Activate.ps1
+          pip install -r requirements.txt 2>&1 | Tee-Object -FilePath pip.log
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::pip install failed: $((Get-Content pip.log -Tail 6) -join ' | ')"; exit 1 }
+
+      - name: "PowerShell: the main libraries load"
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: |
+          .venv\Scripts\Activate.ps1
+          python -c "import dagster, deltalake, duckdb, pandas, pyarrow, plotly, streamlit; print('dagster', dagster.__version__, '| duckdb', duckdb.__version__, '| streamlit', streamlit.__version__)"
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::the smoke test failed"; exit 1 }
 
       - name: Keep the monthly schedule enabled
         if: ${{ always() && github.event_name == 'schedule' && matrix.shell == 'bash' }}
