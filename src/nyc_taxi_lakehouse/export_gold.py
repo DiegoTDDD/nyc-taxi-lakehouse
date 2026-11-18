@@ -1,35 +1,32 @@
 """Export the Gold Delta tables to Parquet files for the deployed dashboard.
 
-The deployed dashboard reads these small Parquet files (no Delta extension needed),
-which keeps the cloud deploy robust and lightweight.
+The deployed dashboard reads these small Parquet files (no Delta reader needed),
+which keeps the cloud deploy light.
+
+Usage:
+    python src/nyc_taxi_lakehouse/export_gold.py
 """
 
-from pathlib import Path
-import duckdb
+import logging
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-GOLD_DIR = PROJECT_ROOT / "data" / "lakehouse" / "gold"
-EXPORT_DIR = PROJECT_ROOT / "data" / "gold_parquet"
+from deltalake import DeltaTable
+from pipeline import GOLD_QUERIES, LakehousePaths
 
-TABLES = [
-    "gold_congestion_impact",
-    "gold_demand_by_hour",
-    "gold_revenue_by_borough",
-    "gold_top_routes",
-]
+log = logging.getLogger(__name__)
+
+
+def export(paths: LakehousePaths) -> None:
+    export_dir = paths.data_dir / "gold_parquet"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    for name in GOLD_QUERIES:
+        target = export_dir / f"{name}.parquet"
+        DeltaTable(str(paths.gold(name))).to_pandas().to_parquet(target, index=False)
+        log.info("[export] %s -> %s", name, target)
 
 
 def main() -> None:
-    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect()
-    con.execute("INSTALL delta; LOAD delta;")
-    for table in TABLES:
-        src = (GOLD_DIR / table).as_posix()
-        dst = (EXPORT_DIR / f"{table}.parquet").as_posix()
-        con.execute(f"COPY (SELECT * FROM delta_scan('{src}')) TO '{dst}' (FORMAT PARQUET)")
-        print(f"[export] {table} -> {dst}")
-    con.close()
-    print("\nExport complete.")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    export(LakehousePaths())
 
 
 if __name__ == "__main__":

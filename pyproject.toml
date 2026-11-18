@@ -1,0 +1,29 @@
+[project]
+name = "nyc-taxi-lakehouse"
+version = "1.1.0"
+description = "Medallion lakehouse (Delta Lake, DuckDB, Dagster) over 22M NYC taxi trips"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Diego Alves" }]
+# Pinned dependencies live in requirements.txt and requirements-test.txt.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -p no:logging"
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".github"]
+
+[tool.ruff.lint]
+# ANN: type hints on every pipeline function. T20: no print() there; use logging.
+select = ["E", "F", "I", "B", "UP", "ANN", "T20"]
+ignore = ["E402", "ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "T20"]
+"scripts/**" = ["ANN", "T20", "E501"]
+"dashboard.py" = ["ANN", "T20", "E501"]

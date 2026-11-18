@@ -1,0 +1,3 @@
+# Unit tests (tests/): the pipeline and the Dagster checks on a few hand-made rows.
+-r requirements.txt
+pytest==9.2.0

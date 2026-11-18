@@ -1,15 +1,16 @@
 """Sanity checks on the Bronze Delta table."""
 
+import sys
 from pathlib import Path
-import duckdb
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "nyc_taxi_lakehouse"))
+from pipeline import connect  # noqa: E402
 
 BRONZE_PATH = Path(__file__).resolve().parents[2] / "data" / "lakehouse" / "bronze"
 
-con = duckdb.connect()
-# delta_scan reads a Delta table directly with DuckDB.
-con.execute("INSTALL delta; LOAD delta;")
+con = connect(t=BRONZE_PATH)
 
-bronze = f"delta_scan('{BRONZE_PATH.as_posix()}')"
+bronze = "t"
 
 print("Total rows in Bronze:")
 total = con.execute(f"SELECT COUNT(*) FROM {bronze}").fetchone()[0]

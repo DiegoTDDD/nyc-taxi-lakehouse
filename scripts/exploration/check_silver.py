@@ -1,13 +1,15 @@
 """Sanity checks on the Silver Delta table."""
 
+import sys
 from pathlib import Path
-import duckdb
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "nyc_taxi_lakehouse"))
+from pipeline import connect  # noqa: E402
 
 SILVER_PATH = Path(__file__).resolve().parents[2] / "data" / "lakehouse" / "silver"
 
-con = duckdb.connect()
-con.execute("INSTALL delta; LOAD delta;")
-silver = f"delta_scan('{SILVER_PATH.as_posix()}')"
+con = connect(t=SILVER_PATH)
+silver = "t"
 
 print("Trips by congestion era:")
 for era, n in con.execute(

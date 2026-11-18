@@ -1,7 +1,11 @@
 """Download NYC Yellow Taxi Parquet files from the TLC for the target months."""
 
+import logging
 from pathlib import Path
+
 import requests
+
+log = logging.getLogger(__name__)
 
 # Months chosen to straddle the January 2025 congestion pricing rollout:
 # three months before (2024) and three months after (2025).
@@ -23,10 +27,10 @@ def download_month(month: str) -> None:
     destination = RAW_DIR / filename
 
     if destination.exists():
-        print(f"[skip] {filename} already downloaded")
+        log.info(f"[skip] {filename} already downloaded")
         return
 
-    print(f"[downloading] {filename} ...")
+    log.info(f"[downloading] {filename} ...")
     response = requests.get(url, stream=True, timeout=120)
     response.raise_for_status()
 
@@ -35,15 +39,16 @@ def download_month(month: str) -> None:
             file.write(chunk)
 
     size_mb = destination.stat().st_size / (1024 * 1024)
-    print(f"[done] {filename} ({size_mb:.1f} MB)")
+    log.info(f"[done] {filename} ({size_mb:.1f} MB)")
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     RAW_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Saving files to: {RAW_DIR}")
+    log.info(f"Saving files to: {RAW_DIR}")
     for month in MONTHS:
         download_month(month)
-    print("\nAll downloads finished.")
+    log.info("All downloads finished.")
 
 
 if __name__ == "__main__":

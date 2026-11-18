@@ -1,6 +1,7 @@
 """Quick inspection of the raw Parquet files: schema and a few rows."""
 
 from pathlib import Path
+
 import duckdb
 
 RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"

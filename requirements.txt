@@ -1,9 +1,11 @@
-dagster
-dagster-webserver
-deltalake
-duckdb
-pandas
-pyarrow
-requests
+# Pinned to the versions the full how-to-run check last passed with on the real data
+# (22.3 million rows). Bump them together and run that check (howto-check.yml).
+dagster==1.13.28
+dagster-webserver==1.13.28
+deltalake==1.6.6
+duckdb==2.0.0
+pandas==3.1.0
+pyarrow==26.0.0
+requests==2.34.2
 streamlit==1.66.1
-plotly
+plotly==7.1.0

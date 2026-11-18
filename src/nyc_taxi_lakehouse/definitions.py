@@ -1,173 +1,204 @@
-"""Dagster definitions: the medallion pipeline as a graph of assets.
+"""Dagster definitions: the medallion pipeline as a graph of assets with data-quality checks.
 
-bronze -> silver -> gold. Each asset wraps the SQL logic already validated
-in the standalone scripts, now with declared dependencies and quality checks.
+bronze_trips -> silver_trips -> gold_tables. The assets call pipeline.py; the
+checks measure each layer after it is written. Checks marked `blocking` stop the
+run before a bad layer feeds the next one (ADR 0002).
+
+Run:
+    dagster dev -f src/nyc_taxi_lakehouse/definitions.py
 """
 
-from datetime import datetime, timezone
+from __future__ import annotations
+
+import sys
 from pathlib import Path
 
-import duckdb
-from deltalake import write_deltalake
-from dagster import asset, asset_check, AssetCheckResult, Definitions, MaterializeResult
+from dagster import (
+    AssetCheckResult,
+    AssetCheckSeverity,
+    ConfigurableResource,
+    Definitions,
+    MaterializeResult,
+    asset,
+    asset_check,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RAW_DIR = PROJECT_ROOT / "data" / "raw"
-LAKEHOUSE = PROJECT_ROOT / "data" / "lakehouse"
-BRONZE_PATH = LAKEHOUSE / "bronze"
-SILVER_PATH = LAKEHOUSE / "silver"
-GOLD_DIR = LAKEHOUSE / "gold"
-ZONES_CSV = RAW_DIR / "taxi_zone_lookup.csv"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pipeline import (  # noqa: E402
+    MAX_REMOVED_SHARE,
+    PROJECT_ROOT,
+    LakehousePaths,
+    build_gold,
+    build_silver,
+    columns,
+    count_rows,
+    count_violations,
+    ingest_bronze,
+    scalar,
+)
 
 
-def _delta_scan(path: Path) -> str:
-    return f"delta_scan('{path.as_posix()}')"
+class Lakehouse(ConfigurableResource):
+    """The data folder the pipeline reads and writes (a temporary one in tests)."""
+
+    data_dir: str = str(PROJECT_ROOT / "data")
+    # Share of Bronze that Silver may drop as invalid before the run stops (real data: ~19%).
+    max_removed_share: float = MAX_REMOVED_SHARE
+
+    @property
+    def paths(self) -> LakehousePaths:
+        return LakehousePaths(Path(self.data_dir))
+
+
+def _result(bad: int, **metadata: object) -> AssetCheckResult:
+    return AssetCheckResult(passed=bad == 0, metadata={"bad_rows": bad, **metadata})
+
+
+# --------------------------------------------------------------------------- assets
 
 
 @asset
-def bronze_trips() -> MaterializeResult:
+def bronze_trips(lakehouse: Lakehouse) -> MaterializeResult:
     """Raw TLC Parquet files ingested faithfully into a Delta table."""
-    raw_files = sorted(RAW_DIR.glob("yellow_tripdata_*.parquet"))
-    total_rows = 0
-    for index, parquet_path in enumerate(raw_files):
-        con = duckdb.connect()
-        ingested_at = datetime.now(timezone.utc)
-        arrow_table = con.execute(
-            f"""
-            SELECT *,
-                TIMESTAMP '{ingested_at:%Y-%m-%d %H:%M:%S}' AS _ingested_at,
-                '{parquet_path.name}' AS _source_file
-            FROM '{parquet_path}'
-            """
-        ).to_arrow_table()
-        con.close()
-        write_deltalake(
-            str(BRONZE_PATH),
-            arrow_table,
-            mode="overwrite" if index == 0 else "append",
-            schema_mode="overwrite" if index == 0 else "merge",
-        )
-        total_rows += arrow_table.num_rows
-    return MaterializeResult(metadata={"rows": total_rows})
+    return MaterializeResult(metadata={"rows": ingest_bronze(lakehouse.paths)})
 
 
 @asset(deps=[bronze_trips])
-def silver_trips() -> MaterializeResult:
-    """Cleaned, validated, and enriched trips with zone names and congestion era."""
-    con = duckdb.connect()
-    con.execute("INSTALL delta; LOAD delta;")
-    bronze = _delta_scan(BRONZE_PATH)
-    zones = f"read_csv_auto('{ZONES_CSV.as_posix()}')"
-    query = f"""
-    WITH cleaned AS (
-        SELECT
-            VendorID AS vendor_id,
-            tpep_pickup_datetime AS pickup_datetime,
-            tpep_dropoff_datetime AS dropoff_datetime,
-            passenger_count, trip_distance, payment_type,
-            PULocationID AS pickup_location_id,
-            DOLocationID AS dropoff_location_id,
-            fare_amount, tip_amount, tolls_amount, total_amount,
-            congestion_surcharge,
-            COALESCE(cbd_congestion_fee, 0) AS cbd_congestion_fee,
-            _source_file,
-            date_diff('minute', tpep_pickup_datetime, tpep_dropoff_datetime) AS trip_duration_min
-        FROM {bronze}
-        WHERE fare_amount > 0 AND total_amount > 0
-          AND trip_distance > 0 AND trip_distance < 100
-          AND passenger_count BETWEEN 1 AND 6
-          AND tpep_dropoff_datetime > tpep_pickup_datetime
-          AND date_diff('minute', tpep_pickup_datetime, tpep_dropoff_datetime) BETWEEN 1 AND 1440
-    )
-    SELECT c.*,
-        EXTRACT(hour FROM c.pickup_datetime) AS pickup_hour,
-        dayname(c.pickup_datetime) AS pickup_day_of_week,
-        date_trunc('month', c.pickup_datetime) AS pickup_month,
-        CASE WHEN c.pickup_datetime >= TIMESTAMP '2025-01-01' THEN 'after' ELSE 'before' END AS congestion_era,
-        pu.Zone AS pickup_zone, pu.Borough AS pickup_borough,
-        dz.Zone AS dropoff_zone, dz.Borough AS dropoff_borough
-    FROM cleaned c
-    LEFT JOIN {zones} pu ON c.pickup_location_id = pu.LocationID
-    LEFT JOIN {zones} dz ON c.dropoff_location_id = dz.LocationID
-    """
-    arrow_table = con.execute(query).to_arrow_table()
-    con.close()
-    write_deltalake(str(SILVER_PATH), arrow_table, mode="overwrite", schema_mode="overwrite")
-    return MaterializeResult(metadata={"rows": arrow_table.num_rows})
+def silver_trips(lakehouse: Lakehouse) -> MaterializeResult:
+    """Cleaned, validated and enriched trips with zone names and congestion era."""
+    return MaterializeResult(metadata={"rows": build_silver(lakehouse.paths)})
 
 
 @asset(deps=[silver_trips])
-def gold_tables() -> MaterializeResult:
+def gold_tables(lakehouse: Lakehouse) -> MaterializeResult:
     """Business-ready aggregate tables built from Silver."""
-    con = duckdb.connect()
-    con.execute("INSTALL delta; LOAD delta;")
-    silver = _delta_scan(SILVER_PATH)
-
-    tables = {
-        "gold_congestion_impact": f"""
-            SELECT congestion_era, COUNT(*) AS trips,
-                ROUND(AVG(fare_amount),2) AS avg_fare,
-                ROUND(AVG(tip_amount),2) AS avg_tip,
-                ROUND(AVG(trip_distance),2) AS avg_distance,
-                ROUND(AVG(trip_duration_min),1) AS avg_duration_min,
-                ROUND(AVG(cbd_congestion_fee),3) AS avg_congestion_fee
-            FROM {silver} WHERE pickup_borough = 'Manhattan'
-            GROUP BY congestion_era ORDER BY congestion_era
-        """,
-        "gold_demand_by_hour": f"""
-            SELECT pickup_hour, congestion_era, COUNT(*) AS trips,
-                ROUND(AVG(fare_amount),2) AS avg_fare
-            FROM {silver} GROUP BY pickup_hour, congestion_era
-            ORDER BY pickup_hour, congestion_era
-        """,
-        "gold_revenue_by_borough": f"""
-            SELECT pickup_borough, congestion_era, COUNT(*) AS trips,
-                ROUND(SUM(total_amount),2) AS total_revenue,
-                ROUND(AVG(total_amount),2) AS avg_revenue_per_trip
-            FROM {silver} WHERE pickup_borough IS NOT NULL
-            GROUP BY pickup_borough, congestion_era ORDER BY total_revenue DESC
-        """,
-        "gold_top_routes": f"""
-            SELECT pickup_zone, dropoff_zone, COUNT(*) AS trips,
-                ROUND(AVG(fare_amount),2) AS avg_fare
-            FROM {silver} WHERE pickup_zone IS NOT NULL AND dropoff_zone IS NOT NULL
-            GROUP BY pickup_zone, dropoff_zone ORDER BY trips DESC LIMIT 20
-        """,
-    }
-    total = 0
-    for name, query in tables.items():
-        arrow_table = con.execute(query).to_arrow_table()
-        write_deltalake(str(GOLD_DIR / name), arrow_table, mode="overwrite", schema_mode="overwrite")
-        total += arrow_table.num_rows
-    con.close()
-    return MaterializeResult(metadata={"gold_rows_total": total})
+    counts = build_gold(lakehouse.paths)
+    return MaterializeResult(metadata={"gold_rows_total": sum(counts.values()), **counts})
 
 
-@asset_check(asset=silver_trips)
-def silver_no_negative_fares() -> AssetCheckResult:
-    """Silver must contain no non-positive fares."""
-    con = duckdb.connect()
-    con.execute("INSTALL delta; LOAD delta;")
-    bad = con.execute(
-        f"SELECT COUNT(*) FROM {_delta_scan(SILVER_PATH)} WHERE fare_amount <= 0"
-    ).fetchone()[0]
-    con.close()
-    return AssetCheckResult(passed=(bad == 0), metadata={"bad_rows": bad})
+# --------------------------------------------------------------------------- Bronze checks
 
 
-@asset_check(asset=silver_trips)
-def silver_valid_durations() -> AssetCheckResult:
+@asset_check(asset=bronze_trips, blocking=True)
+def bronze_not_empty(lakehouse: Lakehouse) -> AssetCheckResult:
+    """Bronze must hold rows from at least one source file."""
+    rows = count_rows(lakehouse.paths.bronze)
+    files = scalar("SELECT COUNT(DISTINCT _source_file) FROM b", b=lakehouse.paths.bronze)
+    return AssetCheckResult(passed=rows > 0, metadata={"rows": rows, "source_files": files})
+
+
+@asset_check(asset=bronze_trips)
+def bronze_schema_evolved(lakehouse: Lakehouse) -> AssetCheckResult:
+    """When 2025 files are loaded, Bronze must carry their cbd_congestion_fee column."""
+    paths = lakehouse.paths
+    has_2025 = any(paths.raw_dir.glob("yellow_tripdata_2025-*.parquet"))
+    has_column = "cbd_congestion_fee" in columns(paths.bronze)
+    return AssetCheckResult(
+        passed=has_column or not has_2025,
+        severity=AssetCheckSeverity.WARN,
+        metadata={"has_2025_files": has_2025, "has_cbd_congestion_fee": has_column},
+    )
+
+
+# --------------------------------------------------------------------------- Silver checks
+
+
+@asset_check(asset=silver_trips, blocking=True)
+def silver_no_negative_fares(lakehouse: Lakehouse) -> AssetCheckResult:
+    """Silver must contain no non-positive fares or totals."""
+    return _result(
+        count_violations(lakehouse.paths.silver, "fare_amount <= 0 OR total_amount <= 0")
+    )
+
+
+@asset_check(asset=silver_trips, blocking=True)
+def silver_valid_durations(lakehouse: Lakehouse) -> AssetCheckResult:
     """Trip durations must be within 1 minute and 24 hours."""
-    con = duckdb.connect()
-    con.execute("INSTALL delta; LOAD delta;")
-    bad = con.execute(
-        f"SELECT COUNT(*) FROM {_delta_scan(SILVER_PATH)} WHERE trip_duration_min < 1 OR trip_duration_min > 1440"
-    ).fetchone()[0]
-    con.close()
-    return AssetCheckResult(passed=(bad == 0), metadata={"bad_rows": bad})
+    return _result(count_violations(
+        lakehouse.paths.silver, "trip_duration_min < 1 OR trip_duration_min > 1440"
+    ))
+
+
+@asset_check(asset=silver_trips, blocking=True)
+def silver_values_in_range(lakehouse: Lakehouse) -> AssetCheckResult:
+    """Distance, passengers and timestamps must respect the cleaning rules."""
+    return _result(count_violations(
+        lakehouse.paths.silver,
+        "trip_distance <= 0 OR trip_distance >= 100 OR passenger_count NOT BETWEEN 1 AND 6 "
+        "OR dropoff_datetime <= pickup_datetime",
+    ))
+
+
+@asset_check(asset=silver_trips, blocking=True)
+def silver_no_null_keys(lakehouse: Lakehouse) -> AssetCheckResult:
+    """The columns every Gold table groups or sums by must never be null."""
+    keys = ["pickup_datetime", "dropoff_datetime", "fare_amount", "total_amount",
+            "pickup_hour", "congestion_era", "cbd_congestion_fee"]
+    return _result(count_violations(
+        lakehouse.paths.silver, " OR ".join(f"{k} IS NULL" for k in keys)
+    ))
+
+
+@asset_check(asset=silver_trips, blocking=True)
+def silver_reconciles_with_bronze(lakehouse: Lakehouse) -> AssetCheckResult:
+    """Silver can only lose rows, and at most `max_removed_share` of Bronze."""
+    bronze = count_rows(lakehouse.paths.bronze)
+    silver = count_rows(lakehouse.paths.silver)
+    removed = (bronze - silver) / bronze if bronze else 0.0
+    return AssetCheckResult(
+        passed=silver <= bronze and removed <= lakehouse.max_removed_share,
+        metadata={"bronze_rows": bronze, "silver_rows": silver, "removed_share": round(removed, 4),
+                  "max_removed_share": lakehouse.max_removed_share},
+    )
+
+
+@asset_check(asset=silver_trips)
+def silver_zones_resolved(lakehouse: Lakehouse) -> AssetCheckResult:
+    """Almost every pickup zone should match the TLC zone lookup (warning only)."""
+    total = count_rows(lakehouse.paths.silver)
+    missing = count_violations(lakehouse.paths.silver, "pickup_borough IS NULL")
+    share = missing / total if total else 0.0
+    return AssetCheckResult(
+        passed=share <= 0.01,
+        severity=AssetCheckSeverity.WARN,
+        metadata={"unmatched_pickup_zones": missing, "unmatched_share": round(share, 4)},
+    )
+
+
+# --------------------------------------------------------------------------- Gold checks
+
+
+@asset_check(asset=gold_tables)
+def gold_demand_reconciles_with_silver(lakehouse: Lakehouse) -> AssetCheckResult:
+    """Trips in gold_demand_by_hour must add up to exactly the Silver row count."""
+    paths = lakehouse.paths
+    gold = int(scalar("SELECT SUM(trips) FROM g", g=paths.gold("gold_demand_by_hour")))
+    silver = count_rows(paths.silver)
+    return AssetCheckResult(passed=gold == silver,
+                            metadata={"gold_trips": gold, "silver_rows": silver})
+
+
+@asset_check(asset=gold_tables)
+def gold_congestion_impact_has_both_eras(lakehouse: Lakehouse) -> AssetCheckResult:
+    """The headline comparison needs Manhattan trips before and after the fee."""
+    eras = scalar("SELECT COUNT(DISTINCT congestion_era) FROM g",
+                  g=lakehouse.paths.gold("gold_congestion_impact"))
+    return AssetCheckResult(passed=eras == 2, metadata={"eras": eras})
 
 
 defs = Definitions(
     assets=[bronze_trips, silver_trips, gold_tables],
-    asset_checks=[silver_no_negative_fares, silver_valid_durations],
+    asset_checks=[
+        bronze_not_empty,
+        bronze_schema_evolved,
+        silver_no_negative_fares,
+        silver_valid_durations,
+        silver_values_in_range,
+        silver_no_null_keys,
+        silver_reconciles_with_bronze,
+        silver_zones_resolved,
+        gold_demand_reconciles_with_silver,
+        gold_congestion_impact_has_both_eras,
+    ],
+    resources={"lakehouse": Lakehouse()},
 )
